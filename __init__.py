@@ -7,12 +7,12 @@
 # it under the terms of the GNU Lesser General Public License as
 # published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
-# 
+#
 # JayDeBeApi is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Lesser General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Lesser General Public
 # License along with JayDeBeApi.  If not, see
 # <http://www.gnu.org/licenses/>.
@@ -146,7 +146,7 @@ def _handle_sql_exception_jpype():
     else:
         exc_type = InterfaceError
     reraise(exc_type, exc_info[1], exc_info[2])
-    
+
 def _jdbc_connect_jpype(jclassname, jars, libs, *driver_args):
     import jpype
     if not jpype.isJVMStarted():
@@ -359,6 +359,19 @@ def connect(jclassname, driver_args, jars=None, libs=None):
     jconn = _jdbc_connect(jclassname, jars, libs, *driver_args)
     return Connection(jconn, _converters)
 
+def tdconnect(server=None, uid=None, pwd=None, driver='com.teradata.jdbc.TeraDriver',jars=None,driver_path='/opt/teradata/JDBC/',tmode='ANSI',charset='UTF8',mode=None):
+    con_args='jdbc:teradata://{0}/TMODE={1},CHARSET={2}'.format(server,tmode,charset)
+    if not jars:
+        jars=['{0}terajdbc4.jar'.format(driver_path),'{0}tdgssconfig.jar'.format(driver_path)]
+    jclassname = driver
+    if mode:
+        con_args='{0},TYPE={1}'.format(con_args,mode)
+    driver_args=[con_args,uid,pwd]
+    libs=[]
+
+    jconn = _jdbc_connect(jclassname, jars, libs, *driver_args)
+    return Connection(jconn, _converters)
+
 # DB-API 2.0 Connection Object
 class Connection(object):
 
@@ -441,7 +454,6 @@ class Cursor(object):
             return self._description
 
 #   optional callproc(self, procname, *parameters) unsupported
-
     def close(self):
         self._close_last()
         self._connection = None
@@ -542,7 +554,65 @@ class Cursor(object):
                 rows.append(row)
         return rows
 
-    # optional nextset() unsupported
+    def getConvertFuncs(self,columnCount=0):
+        sql_converters=[]
+        dict_sql_converter = {-16:self._rs.getAsciiStream,-7:self._rs.getBoolean,-6:self._rs.getByte,-5:self._rs.getLong,-4:self._rs.getBinaryStream,
+                -3:self._rs.getBytes,-2:self._rs.getBytes,-1:self._rs.getCharacterStream,1:self._rs.getString,2:self._rs.getBigDecimal,
+                3:self._rs.getBigDecimal,4:self._rs.getInt,5:self._rs.getShort,6:self._rs.getDouble,7:self._rs.getFloat,
+                8:self._rs.getDouble,12:self._rs.getString,16:self._rs.getBoolean,91:self._rs.getDate,92:self._rs.getTime,
+                93:self._rs.getTimestamp,2000:self._rs.getObject,2002:self._rs.getObject,2003:self._rs.getArray,2004:self._rs.getBlob,
+                2005:self._rs.getClob,2006:self._rs.getRef}
+        for col in range(1,columnCount):
+            sqltype = self._meta.getColumnType(col)
+            try:
+                sql_converter=dict_sql_converter[int(sqltype)]
+            except KeyError:
+                print("Default converter applied to {0}th column, datatype: {1}".format(col,sqltype))
+                sql_converter=self._rs.getObject
+            sql_converters.append(sql_converter)
+        return sql_converters
+
+    def writeCSV(self, file_handler, data, separator):
+        tmp_buff=""
+        for row in data:
+            tmp_buff+=separator.join(str(col) for col in row)
+            tmp_buff+="\n"
+        file_handler.write(tmp_buff)
+        return 0
+
+    def export(self,file=None,separator=',',fetchsize=500000):
+        if not file:
+            file = '{0}_tmp.csv'.format(int(time.time()))
+        try:
+            file_handler = open(file,'w')
+        except IOError:
+            print("Unable to open/write to file: {0}".format(file))
+            return
+        i=0
+        rows=[]
+        if not self._rs:
+            raise Error()
+        col_cnt = self._meta.getColumnCount() + 1
+        get_cols = self.getConvertFuncs(columnCount=col_cnt)
+        self._rs.setFetchSize(fetchsize)
+        while self._rs.next():
+            i+=1
+            row=[]
+            for col in range(1, col_cnt):
+                row.append(get_cols[col-1](col))
+            rows.append(row)
+            if i%fetchsize == 0:
+                self.writeCSV(file_handler,rows,separator)
+                rows=[]
+        self.writeCSV(file_handler,rows,separator)
+        file_handler.close()
+        return file
+
+    def executesqlfile(self, sqlfile='',separator=';',ignore_failure='No'):
+        resultset={}
+        sqlfl_hand = open(sqlfile,'r')
+        sqlfl_hand.close()
+        return resultset
 
     arraysize = 1
 
